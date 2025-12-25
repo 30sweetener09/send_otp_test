@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Xác thực OTP - CMA</title>
+    <style>
+        :root { --primary: #007bff; --bg: #f4f7f6; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: var(--bg); display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+        .container { background: white; padding: 30px; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); width: 100%; max-width: 400px; }
+        h2 { text-align: center; color: #333; margin-bottom: 20px; }
+        input { width: 100%; padding: 12px; margin: 10px 0; border: 1px solid #ddd; border-radius: 6px; box-sizing: border-box; font-size: 16px; }
+        button { width: 100%; padding: 12px; border: none; border-radius: 6px; font-size: 16px; cursor: pointer; transition: 0.3s; }
+        .btn-send { background: var(--primary); color: white; }
+        .btn-send:disabled { background: #ccc; cursor: not-allowed; }
+        .btn-verify { background: #28a745; color: white; margin-top: 10px; }
+        .hidden { display: none; }
+        .msg { margin-top: 15px; font-size: 14px; text-align: center; min-height: 20px; }
+        .error { color: #dc3545; }
+        .success { color: #28a745; }
+        .resend-text { font-size: 13px; color: #666; margin-top: 10px; text-align: center; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>Xác thực Email</h2>
+
+    <div id="step-email">
+        <p>Nhập email để nhận mã xác nhận (OTP)</p>
+        <input type="email" id="email" placeholder="vi-du@gmail.com" required>
+        <button id="btn-send-otp" class="btn-send" onclick="handleSendOTP()">Gửi mã OTP</button>
+    </div>
+
+    <div id="step-otp" class="hidden">
+        <p>Mã OTP đã được gửi đến: <strong id="target-email"></strong></p>
+        <input type="text" id="otp-input" placeholder="Nhập 6 chữ số" maxlength="6">
+        <button class="btn-verify" onclick="handleVerify()">Xác minh ngay</button>
+        <div class="resend-text">
+            Chưa nhận được mã? <button id="btn-resend" style="width: auto; padding: 0; background: none; color: var(--primary); font-size: 13px; text-decoration: underline;" onclick="handleSendOTP()" disabled>Gửi lại</button>
+            <span id="timer"></span>
+        </div>
+    </div>
+
+    <div id="message-box" class="msg"></div>
+</div>
+
+<script>
+    const API_BASE = "http://localhost:3000";
+    let countdown;
+
+    // Hàm hiển thị thông báo
+    function showMsg(text, isError = false) {
+        const box = document.getElementById('message-box');
+        box.innerText = text;
+        box.className = isError ? "msg error" : "msg success";
+    }
+
+    // Xử lý Gửi OTP
+    async function handleSendOTP() {
+        const email = document.getElementById('email').value;
+        const btnSend = document.getElementById('btn-send-otp');
+        const btnResend = document.getElementById('btn-resend');
+
+        if (!email) return showMsg("Vui lòng nhập email!", true);
+
+        try {
+            const res = await fetch(`${API_BASE}/user/send-verification-code`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email })
+            });
+
+            const data = await res.json();
+
+            if (res.ok) {
+                showMsg(data.message);
+                document.getElementById('step-email').classList.add('hidden');
+                document.getElementById('step-otp').classList.remove('hidden');
+                document.getElementById('target-email').innerText = email;
+                startTimer(60); // Đếm ngược 60s
+            } else {
+                showMsg(data.error, true);
+                if (res.status === 429) {
+                    // Nếu lỗi do spam, lấy số giây từ message (ví dụ: "Vui lòng đợi 45 giây...")
+                    const seconds = data.error.match(/\d+/);
+                    if (seconds) startTimer(parseInt(seconds[0]));
+                }
+            }
+        } catch (err) {
+            showMsg("Không thể kết nối đến Server!", true);
+        }
+    }
+
+    // Xử lý Xác minh OTP
+    async function handleVerify() {
+        const email = document.getElementById('email').value;
+        const otp = document.getElementById('otp-input').value;
+
+        try {
+            const res = await fetch(`${API_BASE}/user/verify-email`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email, otp })
+            });
+
+            const data = await res.json();
+            if (res.ok) {
+                showMsg("🎉 " + data.message);
+                document.getElementById('step-otp').innerHTML = "<h4 style='color:green'>Xác thực thành công!</h4>";
+            } else {
+                showMsg(data.error, true);
+            }
+        } catch (err) {
+            showMsg("Lỗi xác minh!", true);
+        }
+    }
+
+    // Hàm đếm ngược
+    function startTimer(seconds) {
+        const btnResend = document.getElementById('btn-resend');
+        const timerSpan = document.getElementById('timer');
+        
+        btnResend.disabled = true;
+        clearInterval(countdown);
+
+        let timeLeft = seconds;
+        countdown = setInterval(() => {
+            timerSpan.innerText = `(${timeLeft}s)`;
+            timeLeft--;
+
+            if (timeLeft < 0) {
+                clearInterval(countdown);
+                timerSpan.innerText = "";
+                btnResend.disabled = false;
+            }
+        }, 1000);
+    }
+</script>
+
+</body>
+</html>

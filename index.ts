@@ -1,26 +1,50 @@
 import { Resend } from 'resend';
 import express from 'express';
+import mongoose from 'mongoose';
+import cors from 'cors';
 import 'dotenv/config';
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 const app = express();
 app.use(express.json());
+app.use(cors());
 
-// Nơi lưu trữ tạm thời
-const otpStore: Record<string, { code: string, expiresAt: number }> = {};
+mongoose.connect(process.env.DB_MONGODB_URI || 'mongodb://localhost:27017/otp_db')
+  .then(() => {console.log('Kết nối đến MongoDB thành công');})
+  .catch((err) => {console.error('Lỗi kết nối đến MongoDB:', err);});
+
+//Tạo Schema cho OTP
+const otpSchema = new mongoose.Schema({
+  email: { type: String, required: true },
+  code: { type: String, required: true },
+  createdAt: { type: Date, default: Date.now, expires: 300 } // Tự động xóa sau 300 giây (5 phút)
+});
+const OtpModel = mongoose.model('Otp', otpSchema);
 
 app.post('/user/send-verification-code', async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ error: "Thiếu email!" });
 
-  const otp = Math.floor(100000 + Math.random() * 900000).toString();
-  otpStore[email] = {
-    code: otp,
-    expiresAt: Date.now() + 5 * 60 * 1000 // 5 phút
-  }; // Lưu mã OTP tạm thời
-
   try {
-    const data = await resend.emails.send({
+    // Tìm mã OTP cũ của email này
+    const existingRecord = await OtpModel.findOne({ email });
+
+    if (existingRecord) {
+      const now = Date.now();
+      const lastSent = new Date(existingRecord.createdAt).getTime();
+      const diff = (now - lastSent) / 1000; // Đổi sang giây
+
+      if (diff < 60) {
+        return res.status(429).json({ 
+          error: `Vui lòng đợi ${Math.ceil(60 - diff)} giây nữa trước khi gửi lại.` 
+        });
+      }
+    }
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    await OtpModel.deleteOne({ email });
+    await OtpModel.create({ email, code: otp });
+
+    await resend.emails.send({
       from: 'CMA <auth@antnv3467.id.vn>',
       to: [email],
       subject: 'Mã xác nhận của bạn',
@@ -40,27 +64,14 @@ app.post('/user/send-verification-code', async (req, res) => {
   }
 })
 
-app.post('/user/verify-email', (req, res) => {
+app.post('/user/verify-email', async (req, res) => {
   const { email, otp } = req.body;
-  const record = otpStore[email];
-  if (!record) {
-    return res.status(400).json({ error: "Mã OTP không tồn tại hoặc đã hết hạn." });
-  }
-
-  const isExpired = Date.now() > record.expiresAt;
-
-  if (isExpired) {
-    delete otpStore[email]; // Xóa mã đã hết hạn
-    return res.status(400).json({ error: "Mã OTP đã hết hạn 5 phút." });
-  }
-
-  // Kiểm tra mã người dùng nhập với mã trong bộ nhớ
-  if (record.code === otp) {
-    // Nếu đúng, xóa mã OTP đó đi để không dùng lại được lần 2
-    delete otpStore[email];
-    res.status(200).json({ message: "Xác minh thành công! Chào mừng bạn." });
+  const record = await OtpModel.findOne({ email, code: otp });
+  if (record) {
+    await OtpModel.deleteOne({ email }); // Dùng xong thì xóa
+    res.status(200).json({ message: "Xác minh thành công!" });
   } else {
-    res.status(400).json({ error: "Mã OTP không đúng hoặc đã hết hạn." });
+    res.status(400).json({ error: "Mã OTP sai hoặc đã hết hạn." });
   }
 });
 
